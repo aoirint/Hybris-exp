@@ -1,6 +1,7 @@
 OPENPOSE_MODEL_FOLDER_PATH = '/openpose/models'
 OPENPOSE_INSTALL_PATH = '/usr/local/python'
 
+OPENPOSE_NOSE = 0
 OPENPOSE_NECK = 1
 OPENPOSE_LEFT_SHOULDER = 5
 OPENPOSE_RIGHT_SHOULDER = 2
@@ -18,21 +19,22 @@ def get_keypoints(image):
 
     opWrapper.emplaceAndPop([datum])
 
-    left_shoulder = datum.poseKeypoints[0][OPENPOSE_LEFT_SHOULDER]
-    right_shoulder = datum.poseKeypoints[0][OPENPOSE_RIGHT_SHOULDER]
-    neck_shoulder = datum.poseKeypoints[0][OPENPOSE_NECK]
+    poses = np.asarray(datum.poseKeypoints[0], dtype=np.float32)
+    keypoints = poses[:, :2]
+    confs = poses[:, 2]
 
-    left_pos, left_conf = np.asarray(left_shoulder[:2]), left_shoulder[2]
-    right_pos, right_conf = np.asarray(right_shoulder[:2]), right_shoulder[2]
-    neck_pos, neck_conf = np.asarray(neck_shoulder[:2]), neck_shoulder[2]
+    return keypoints, confs, datum.cvOutputData
 
-    center_pos = (left_pos + right_pos) / 2
 
-    return np.asarray([left_pos, right_pos, neck_pos, center_pos], dtype=np.float32), datum.cvOutputData
 
-def split_rgba(image):
+def split_alpha(image):
+    if image.shape[2] != 4:
+        h, w, c = image.shape
+        A = np.full((h, w), 255, dtype=np.uint8)
+        return image.copy(), A
+
     B, G, R, A = cv2.split(image)
-    return cv2.merge([ R, G, B ]), A
+    return cv2.merge([ B, G, R ]), A
 
 def copy_to(source, dest, mask):
     mask_1ch = np.expand_dims(mask, axis=2) != 0
@@ -56,30 +58,75 @@ if __name__ == '__main__':
     # https://www.pakutaso.com/20161057291post-9287.html
     target_image_path = '00_PP04_PP_TP_V.jpg'
 
-    # http://iei.sozaiya.com/archives/cat_303519.html
+    # http://iei.sozaiya.com/archives/12029905.html
     material_image_path = 'man_suit.png'
 
     target_image = cv2.imread(target_image_path)
-    target_points, target_rendered = get_keypoints(target_image)
+    target_keypoints, target_confs,  target_rendered = get_keypoints(target_image)
     cv2.imwrite('target_rendered.jpg', target_rendered)
 
-    material_image = cv2.imread(material_image_path, -1)
-    material_rgb, material_mask = split_rgba(material_image)
+    target_leftsh_pos = target_keypoints[OPENPOSE_LEFT_SHOULDER]
+    target_rightsh_pos = target_keypoints[OPENPOSE_RIGHT_SHOULDER]
+    target_neck_pos = target_keypoints[OPENPOSE_NECK]
+    target_nose_pos = target_keypoints[OPENPOSE_NOSE]
 
-    material_points, material_rendered = get_keypoints(material_rgb)
+    material_image = cv2.imread(material_image_path, -1)
+    material_bgr, material_mask = split_alpha(material_image)
+
+    material_keypoints, material_confs, material_rendered = get_keypoints(material_bgr)
     cv2.imwrite('material_rendered.jpg', material_rendered)
 
-    # M = cv2.getAffineTransform(material_points, target_points)
-    print(material_points.dtype)
-    M = cv2.getPerspectiveTransform(material_points, target_points)
+    cv2.namedWindow('out', cv2.WINDOW_NORMAL)
+    cv2.resizeWindow('out', (800, 600))
 
-    th, tw, _ = target_image.shape
-    # material_mask_warped = cv2.warpAffine(material_mask, M, (tw, th))
-    # material_rgb_warped = cv2.warpAffine(material_rgb, M, (tw, th))
-    material_mask_warped = cv2.warpPerspective(material_mask, M, (tw, th))
-    material_rgb_warped = cv2.warpPerspective(material_rgb, M, (tw, th))
+    dy = 0
+    while True:
+        material_leftsh_pos = material_keypoints[OPENPOSE_LEFT_SHOULDER]
+        material_rightsh_pos = material_keypoints[OPENPOSE_RIGHT_SHOULDER]
+        material_neck_pos = material_keypoints[OPENPOSE_NECK]
 
-    fusion_rgb = copy_to(material_rgb_warped, target_image, material_mask_warped)
+        target_shoulder_distance = abs(target_leftsh_pos[0] - target_rightsh_pos[0])
+        target_necknose_distance = abs(target_nose_pos[1] - target_neck_pos[1])
 
-    fusion = cv2.cvtColor(fusion_rgb, cv2.COLOR_RGB2BGR)
-    cv2.imwrite('out.jpg', fusion)
+        material_shoulder_distance = abs(target_leftsh_pos[0] - target_rightsh_pos[0])
+        material_nose_dy = target_necknose_distance / target_shoulder_distance * material_shoulder_distance
+        material_nose_pos = material_neck_pos - [ 0, material_nose_dy ] - [ 0, dy ]
+
+        target_points = np.asarray([
+            target_leftsh_pos,
+            target_rightsh_pos,
+            # target_neck_pos,
+            target_nose_pos,
+        ], dtype=np.float32)
+        material_points = np.asarray([
+            material_leftsh_pos,
+            material_rightsh_pos,
+            # material_neck_pos,
+            material_nose_pos,
+        ], dtype=np.float32)
+
+        M = cv2.getAffineTransform(material_points, target_points)
+        # M = cv2.getPerspectiveTransform(material_points, target_points)
+        # M, _ = cv2.findHomography(material_points, target_points)
+
+        th, tw, _ = target_image.shape
+        material_mask_warped = cv2.warpAffine(material_mask, M, (tw, th))
+        material_bgr_warped = cv2.warpAffine(material_bgr, M, (tw, th))
+        # material_mask_warped = cv2.warpPerspective(material_mask, M, (tw, th))
+        # material_rgb_warped = cv2.warpPerspective(material_rgb, M, (tw, th))
+
+        fusion_bgr = copy_to(material_bgr_warped, target_image, material_mask_warped)
+
+        cv2.imshow('out', fusion_bgr)
+
+        key = cv2.waitKey(1)
+        if key & 0xFF == ord('w'):
+            dy -= 1
+            print(dy)
+        elif key & 0xFF == ord('s'):
+            dy += 1
+            print(dy)
+        elif key & 0xFF == ord('c'):
+            cv2.imwrite('out.jpg', fusion_bgr)
+        elif key & 0xFF == ord('q'):
+            break

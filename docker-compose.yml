@@ -3,8 +3,13 @@ services:
   app:
     build: .
     runtime: nvidia
-    command: python3 main.py
+    # command: python3 main.py
+    tty: true
     volumes:
       - .:/code
+      - /tmp/.X11-unix # X window
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+      - DISPLAY=$DISPLAY # X window
+      - QT_X11_NO_MITSHM=1 # X window
+    network_mode: host # X window
