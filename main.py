@@ -26,7 +26,9 @@ def get_keypoints(image):
     right_pos, right_conf = np.asarray(right_shoulder[:2]), right_shoulder[2]
     neck_pos, neck_conf = np.asarray(neck_shoulder[:2]), neck_shoulder[2]
 
-    return np.asarray([left_pos, right_pos, neck_pos]), datum.cvOutputData
+    center_pos = (left_pos + right_pos) / 2
+
+    return np.asarray([left_pos, right_pos, neck_pos, center_pos], dtype=np.float32), datum.cvOutputData
 
 def split_rgba(image):
     B, G, R, A = cv2.split(image)
@@ -67,11 +69,15 @@ if __name__ == '__main__':
     material_points, material_rendered = get_keypoints(material_rgb)
     cv2.imwrite('material_rendered.jpg', material_rendered)
 
-    affine = cv2.getAffineTransform(material_points, target_points)
+    # M = cv2.getAffineTransform(material_points, target_points)
+    print(material_points.dtype)
+    M = cv2.getPerspectiveTransform(material_points, target_points)
 
     th, tw, _ = target_image.shape
-    material_mask_warped = cv2.warpAffine(material_mask, affine, (tw, th))
-    material_rgb_warped = cv2.warpAffine(material_rgb, affine, (tw, th))
+    # material_mask_warped = cv2.warpAffine(material_mask, M, (tw, th))
+    # material_rgb_warped = cv2.warpAffine(material_rgb, M, (tw, th))
+    material_mask_warped = cv2.warpPerspective(material_mask, M, (tw, th))
+    material_rgb_warped = cv2.warpPerspective(material_rgb, M, (tw, th))
 
     fusion_rgb = copy_to(material_rgb_warped, target_image, material_mask_warped)
 
